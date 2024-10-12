@@ -136,10 +136,9 @@ func query(domain string, server string, port int, client *whoisTypes.Client) ([
 	_ = connection.SetReadDeadline(time.Now().Add(client.ReadTimeout))
 	data, err := io.ReadAll(connection)
 	if err != nil {
-		return nil, &motmedelErrors.InputError{
+		return nil, &motmedelErrors.CauseError{
 			Message: "An error occurred when reading data from the connection.",
 			Cause:   err,
-			Input:   connection,
 		}
 	}
 
