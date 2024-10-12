@@ -137,7 +137,7 @@ func query(domain string, server string, port int, client *whoisTypes.Client) ([
 	data, err := io.ReadAll(connection)
 	if err != nil {
 		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when reading data from the connection..",
+			Message: "An error occurred when reading data from the connection.",
 			Cause:   err,
 			Input:   connection,
 		}

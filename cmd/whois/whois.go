@@ -26,9 +26,9 @@ func main() {
 	}
 
 	client := &whoisTypes.Client{
-		Dialer:       net.Dialer{Timeout: 10 * time.Second},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Dialer:       net.Dialer{Timeout: 30 * time.Second},
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 
 	result, err := whois.QueryDefaultWhois(domain, client)
