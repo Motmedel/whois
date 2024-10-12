@@ -1,0 +1,45 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
+	whoisTypes "github.com/Motmedel/whois/pkg/types"
+	"github.com/Motmedel/whois/pkg/whois"
+	"log/slog"
+	"net"
+	"os"
+	"time"
+)
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	var domain string
+	flag.StringVar(&domain, "domain", "", "The domain to look up.")
+
+	flag.Parse()
+
+	if domain == "" {
+		logger.Error("no domain was provided")
+		os.Exit(1)
+	}
+
+	client := &whoisTypes.Client{
+		Dialer:       net.Dialer{Timeout: 10 * time.Second},
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	result, err := whois.QueryDefaultWhois(domain, client)
+	if err != nil {
+		motmedelLog.LogFatal(
+			"An error occurred when querying.",
+			err,
+			logger,
+			1,
+		)
+	}
+
+	fmt.Println(string(result))
+}
