@@ -179,6 +179,7 @@ func QueryWhois(
 	client *whoisTypes.Client,
 	serverAddress string,
 	serverPort int,
+	additional bool,
 ) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
 	if value == "" {
 		return nil, nil, nil
@@ -208,6 +209,10 @@ func QueryWhois(
 	}
 	if len(result) == 0 {
 		return nil, whoisContext, nil
+	}
+
+	if !additional {
+		return result, whoisContext, nil
 	}
 
 	referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
@@ -245,7 +250,11 @@ func getExtension(domain string) string {
 	return extension
 }
 
-func QueryDefaultWhois(value string, client *whoisTypes.Client) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
+func QueryDefaultWhois(
+	value string,
+	client *whoisTypes.Client,
+	additional bool,
+) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
 	if value == "" {
 		return nil, nil, nil
 	}
@@ -290,7 +299,7 @@ func QueryDefaultWhois(value string, client *whoisTypes.Client) ([]byte, *motmed
 		extensionToServerRwMutex.RUnlock()
 	}
 
-	return QueryWhois(value, client, referenceServerHost, referenceServerPort)
+	return QueryWhois(value, client, referenceServerHost, referenceServerPort, additional)
 }
 
 func Parse(whoisResult []byte) (*whoisparser.WhoisInfo, error) {

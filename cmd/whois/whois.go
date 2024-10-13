@@ -31,7 +31,7 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	result, _, err := whois.QueryDefaultWhois(domain, client)
+	result, _, err := whois.QueryDefaultWhois(domain, client, true)
 	if err != nil {
 		motmedelLog.LogFatal(
 			"An error occurred when querying.",
