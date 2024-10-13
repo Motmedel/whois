@@ -6,9 +6,10 @@ import (
 )
 
 var (
-	ErrNilClient   = errors.New("nil whois client")
-	ErrEmptyServer = errors.New("empty server")
-	ErrUnsetPort   = errors.New("unset port")
+	ErrNilClient      = errors.New("nil whois client")
+	ErrEmptyServer    = errors.New("empty server")
+	ErrUnsetPort      = errors.New("unset port")
+	ErrEmptyExtension = errors.New("empty extension")
 )
 
 var (
