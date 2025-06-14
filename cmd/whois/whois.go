@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
+	motmedelErrorLogger "github.com/Motmedel/utils_go/pkg/log/error_logger"
 	whoisTypes "github.com/Motmedel/whois/pkg/types"
 	"github.com/Motmedel/whois/pkg/whois"
 	"log/slog"
@@ -13,7 +15,23 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger := &motmedelErrorLogger.Logger{
+		Logger: slog.New(
+			&motmedelLog.ContextHandler{
+				Next: slog.NewJSONHandler(
+					os.Stderr,
+					&slog.HandlerOptions{
+						AddSource: false,
+						Level:     slog.LevelInfo,
+					},
+				),
+				Extractors: []motmedelLog.ContextExtractor{
+					&motmedelLog.ErrorContextExtractor{},
+				},
+			},
+		),
+	}
+	slog.SetDefault(logger.Logger)
 
 	var domain string
 	flag.StringVar(&domain, "domain", "", "The domain to look up.")
@@ -21,8 +39,7 @@ func main() {
 	flag.Parse()
 
 	if domain == "" {
-		logger.Error("no domain was provided")
-		os.Exit(1)
+		logger.FatalWithExitingMessage("No domain provided.", nil)
 	}
 
 	client := &whoisTypes.Client{
@@ -31,13 +48,11 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	result, _, err := whois.QueryDefaultWhois(domain, client, true)
+	result, err := whois.QueryDefaultWhois(context.Background(), domain, client, true)
 	if err != nil {
-		motmedelLog.LogFatal(
+		logger.FatalWithExitingMessage(
 			"An error occurred when querying.",
-			err,
-			logger,
-			1,
+			fmt.Errorf("query default whois: %w", err),
 		)
 	}
 

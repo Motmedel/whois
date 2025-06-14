@@ -1,9 +1,11 @@
 module github.com/Motmedel/whois
 
-go 1.23.1
+go 1.24.0
+
+toolchain go1.24.4
 
 require (
-	github.com/Motmedel/utils_go v0.0.56
+	github.com/Motmedel/utils_go v0.0.206
 	github.com/likexian/whois-parser v1.24.20
 )
 

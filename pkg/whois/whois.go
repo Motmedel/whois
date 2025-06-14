@@ -1,13 +1,16 @@
 package whois
 
 import (
+	"context"
 	"fmt"
+	motmedelContext "github.com/Motmedel/utils_go/pkg/context"
 	motmedelErrors "github.com/Motmedel/utils_go/pkg/errors"
 	motmedelWhoisTypes "github.com/Motmedel/utils_go/pkg/whois/types"
 	whoisErrors "github.com/Motmedel/whois/pkg/errors"
 	whoisTypes "github.com/Motmedel/whois/pkg/types"
 	"github.com/likexian/whois-parser"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
 	"regexp"
@@ -102,25 +105,26 @@ func getReferenceServerHostPort(whoisResult []byte) (string, int) {
 }
 
 func query(
+	ctx context.Context,
 	domain string,
 	server string,
 	port int,
 	client *whoisTypes.Client,
-) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
+) ([]byte, error) {
 	if domain == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	if server == "" {
-		return nil, nil, whoisErrors.ErrEmptyServer
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyServer)
 	}
 
 	if port == 0 {
-		return nil, nil, whoisErrors.ErrUnsetPort
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrUnsetPort)
 	}
 
 	if client == nil {
-		return nil, nil, whoisErrors.ErrNilClient
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
 	}
 
 	queryString := domain
@@ -129,17 +133,28 @@ func query(
 	}
 
 	address := net.JoinHostPort(server, strconv.Itoa(port))
-	connection, err := client.Dialer.Dial("tcp", address)
+	dialer := client.Dialer
+
+	connection, err := dialer.Dial("tcp", address)
 	if err != nil {
-		return nil, nil, &motmedelErrors.InputError{
-			Message: "An error occurred when making a connection to the whois server.",
-			Cause:   err,
-			Input:   []any{"tcp", address},
-		}
+		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("dialer dial: %w", err), address, dialer)
 	}
-	defer connection.Close()
+	// TODO: Check `nil` connection?
+	defer func() {
+		if err := connection.Close(); err != nil {
+			slog.WarnContext(
+				motmedelContext.WithErrorContextValue(
+					ctx,
+					motmedelErrors.NewWithTrace(fmt.Errorf("connection close: %w", err), connection),
+				),
+				"An error occurred when closing a connection.",
+			)
+		}
+	}()
 
 	writeData := []byte(queryString + "\r\n")
+
+	// TODO: This should be extracted from `ctx`...
 
 	whoisContext := &motmedelWhoisTypes.WhoisContext{
 		ServerAddress:   server,
@@ -153,86 +168,74 @@ func query(
 	_ = connection.SetWriteDeadline(time.Now().Add(client.WriteTimeout))
 	_, err = connection.Write(writeData)
 	if err != nil {
-		return nil, whoisContext, &motmedelErrors.InputError{
-			Message: "An error occurred when writing data to the whois server connection.",
-			Cause:   err,
-			Input:   writeData,
-		}
+		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("connection write: %w", err), connection, writeData)
 	}
 
 	_ = connection.SetReadDeadline(time.Now().Add(client.ReadTimeout))
 	data, err := io.ReadAll(connection)
 	if err != nil {
-		return nil, whoisContext, &motmedelErrors.CauseError{
-			Message: "An error occurred when reading data from the connection.",
-			Cause:   err,
-		}
+		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("io read all (connection): %w", err), connection)
 	}
 
 	whoisContext.ResponseData = data
 
-	return data, whoisContext, nil
+	return data, nil
 }
 
 func QueryWhois(
+	ctx context.Context,
 	value string,
 	client *whoisTypes.Client,
 	serverAddress string,
 	serverPort int,
 	additional bool,
-) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
+) ([]byte, error) {
 	if value == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	if client == nil {
-		return nil, nil, whoisErrors.ErrNilClient
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
 	}
 
 	if serverAddress == "" {
-		return nil, nil, whoisErrors.ErrEmptyServer
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyServer)
 	}
 
 	if serverPort == 0 {
-		return nil, nil, whoisErrors.ErrUnsetPort
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrUnsetPort)
 	}
 
 	// TODO: Support AS lookup, maybe.
 
-	result, whoisContext, err := query(value, serverAddress, serverPort, client)
+	result, err := query(ctx, value, serverAddress, serverPort, client)
 	if err != nil {
-		return nil, whoisContext, &motmedelErrors.InputError{
-			Message: "An error occurred when querying the server.",
-			Cause:   err,
-			Input:   []any{value, serverAddress, serverPort, client},
-		}
+		return nil, fmt.Errorf("query: %w", err)
 	}
 	if len(result) == 0 {
-		return nil, whoisContext, nil
+		return nil, nil
 	}
 
 	if !additional {
-		return result, whoisContext, nil
+		return result, nil
 	}
 
 	referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
 	if referenceServerHost == "" || referenceServerPort == 0 {
-		return result, whoisContext, nil
+		return result, nil
 	}
 
-	referenceResult, referenceWhoisContext, err := query(value, referenceServerHost, referenceServerPort, client)
+	// TODO: Need another ctx here? Use `error` with `Context` method?
+
+	referenceResult, err := query(ctx, value, referenceServerHost, referenceServerPort, client)
 	if err != nil {
-		return nil, referenceWhoisContext, &motmedelErrors.InputError{
-			Message: "An error occurred when querying a referenced server.",
-			Cause:   err,
-			Input:   []any{value, referenceServerHost, referenceServerPort, client},
-		}
+		return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), referenceServerHost, referenceServerPort)
 	}
 	if len(referenceResult) == 0 {
-		return result, whoisContext, nil
+		return result, nil
 	}
 
-	return referenceResult, referenceWhoisContext, nil
+	return referenceResult, nil
 }
 
 func getExtension(domain string) string {
@@ -251,21 +254,22 @@ func getExtension(domain string) string {
 }
 
 func QueryDefaultWhois(
+	ctx context.Context,
 	value string,
 	client *whoisTypes.Client,
 	additional bool,
-) ([]byte, *motmedelWhoisTypes.WhoisContext, error) {
+) ([]byte, error) {
 	if value == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	if client == nil {
-		return nil, nil, whoisErrors.ErrNilClient
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
 	}
 
 	extension := getExtension(value)
 	if extension == "" {
-		return nil, nil, whoisErrors.ErrEmptyExtension
+		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyExtension)
 	}
 
 	var referenceServerHost string
@@ -275,21 +279,17 @@ func QueryDefaultWhois(
 	extensionToServerRwMutex.RLock()
 	if referenceServerHost, ok = ExtensionToServer[extension]; !ok {
 		extensionToServerRwMutex.RUnlock()
-		result, whoisContext, err := query(extension, DefaultWhoisServer, DefaultWhoisPort, client)
+		result, err := query(ctx, extension, DefaultWhoisServer, DefaultWhoisPort, client)
 		if err != nil {
-			return nil, whoisContext, &motmedelErrors.InputError{
-				Message: "An error occurred when querying the default server.",
-				Cause:   err,
-				Input:   []any{extension, DefaultWhoisServer, DefaultWhoisPort, client},
-			}
+			return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), extension)
 		}
 		if len(result) == 0 {
-			return nil, whoisContext, nil
+			return nil, nil
 		}
 
 		referenceServerHost, referenceServerPort = getReferenceServerHostPort(result)
 		if referenceServerHost == "" || referenceServerPort == 0 {
-			return nil, whoisContext, nil
+			return nil, nil
 		}
 
 		extensionToServerRwMutex.Lock()
@@ -299,7 +299,7 @@ func QueryDefaultWhois(
 		extensionToServerRwMutex.RUnlock()
 	}
 
-	return QueryWhois(value, client, referenceServerHost, referenceServerPort, additional)
+	return QueryWhois(ctx, value, client, referenceServerHost, referenceServerPort, additional)
 }
 
 func Parse(whoisResult []byte) (*whoisparser.WhoisInfo, error) {
@@ -310,11 +310,7 @@ func Parse(whoisResult []byte) (*whoisparser.WhoisInfo, error) {
 	whoisResultString := string(whoisResult)
 	parsedResult, err := whoisparser.Parse(whoisResultString)
 	if err != nil {
-		return nil, &motmedelErrors.InputError{
-			Message: "An error occurred when parsing the whois result.",
-			Cause:   err,
-			Input:   whoisResultString,
-		}
+		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("whoisparser parse: %w", err), whoisResultString)
 	}
 
 	return &parsedResult, nil
