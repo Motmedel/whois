@@ -3,7 +3,7 @@ module github.com/Motmedel/whois
 go 1.25
 
 require (
-	github.com/Motmedel/utils_go v0.0.322
+	github.com/Motmedel/utils_go v0.0.323
 	github.com/likexian/whois-parser v1.24.20
 )
 

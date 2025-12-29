@@ -214,6 +214,8 @@ func query(
 		)
 	}
 
+	t := time.Now()
+	whoisContext.Time = &t
 	whoisContext.ResponseData = data
 
 	return data, nil
