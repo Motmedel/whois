@@ -236,25 +236,17 @@ func getExtension(domain string) string {
 	return extension
 }
 
-func Query(
-	ctx context.Context,
-	value string,
-	client *whoisTypes.Client,
-	additional bool,
-	options ...query_config.Option,
-) ([]byte, error) {
+func Query(ctx context.Context, value string, options ...query_config.Option) ([]byte, error) {
 	if value == "" {
 		return nil, nil
-	}
-
-	if client == nil {
-		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
 	}
 
 	config := query_config.New(options...)
 
 	server := config.Server
 	port := config.Port
+	client := config.Client
+	additional := config.Additional
 
 	if server == query_config.DefaultServer && port == query_config.DefaultPort {
 		extension := getExtension(value)
