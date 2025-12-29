@@ -2,6 +2,7 @@ package whois
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -297,20 +298,39 @@ func Query(
 		return result, nil
 	}
 
-	referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
-	if referenceServerHost == "" || referenceServerPort == 0 {
-		return result, nil
+	visitedServers := make(map[string]bool)
+	visitedServers[net.JoinHostPort(server, strconv.Itoa(port))] = true
+
+	for i := 0; i < 10; i++ {
+		referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
+		if referenceServerHost == "" || referenceServerPort == 0 {
+			break
+		}
+
+		referenceServerAddress := net.JoinHostPort(referenceServerHost, strconv.Itoa(referenceServerPort))
+		if visitedServers[referenceServerAddress] {
+			break
+		}
+		visitedServers[referenceServerAddress] = true
+
+		referenceResult, err := query(ctx, value, referenceServerHost, referenceServerPort, client)
+		if err != nil {
+			return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), referenceServerHost, referenceServerPort)
+		}
+
+		if len(referenceResult) == 0 {
+			break
+		}
+
+		_, parseErr := whoisparser.Parse(string(referenceResult))
+		if parseErr != nil && errors.Is(parseErr, whoisparser.ErrNotFoundDomain) {
+			break
+		}
+
+		result = referenceResult
 	}
 
-	referenceResult, err := query(ctx, value, referenceServerHost, referenceServerPort, client)
-	if err != nil {
-		return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), referenceServerHost, referenceServerPort)
-	}
-	if len(referenceResult) == 0 {
-		return result, nil
-	}
-
-	return referenceResult, nil
+	return result, nil
 }
 
 func Parse(whoisResult []byte) (*whoisparser.WhoisInfo, error) {

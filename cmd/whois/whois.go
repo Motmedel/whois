@@ -59,5 +59,9 @@ func main() {
 		)
 	}
 
+	if len(result) == 0 {
+		return
+	}
+
 	fmt.Println(string(result))
 }
