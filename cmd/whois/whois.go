@@ -4,14 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
-	motmedelErrorLogger "github.com/Motmedel/utils_go/pkg/log/error_logger"
-	whoisTypes "github.com/Motmedel/whois/pkg/types"
-	"github.com/Motmedel/whois/pkg/whois"
 	"log/slog"
 	"net"
 	"os"
 	"time"
+
+	motmedelLog "github.com/Motmedel/utils_go/pkg/log"
+	motmedelErrorLogger "github.com/Motmedel/utils_go/pkg/log/error_logger"
+	whoisTypes "github.com/Motmedel/whois/pkg/types"
+	"github.com/Motmedel/whois/pkg/whois"
 )
 
 func main() {
@@ -43,16 +44,18 @@ func main() {
 	}
 
 	client := &whoisTypes.Client{
-		Dialer:       net.Dialer{Timeout: 30 * time.Second},
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Dialer:       net.Dialer{Timeout: 10 * time.Second},
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
-	result, err := whois.QueryDefaultWhois(context.Background(), domain, client, true)
+	result, err := whois.Query(context.Background(), domain, client, true)
 	if err != nil {
 		logger.FatalWithExitingMessage(
 			"An error occurred when querying.",
-			fmt.Errorf("query default whois: %w", err),
+			fmt.Errorf("whois query: %w", err),
+			domain,
+			client,
 		)
 	}
 

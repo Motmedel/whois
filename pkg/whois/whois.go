@@ -3,12 +3,6 @@ package whois
 import (
 	"context"
 	"fmt"
-	motmedelContext "github.com/Motmedel/utils_go/pkg/context"
-	motmedelErrors "github.com/Motmedel/utils_go/pkg/errors"
-	motmedelWhoisTypes "github.com/Motmedel/utils_go/pkg/whois/types"
-	whoisErrors "github.com/Motmedel/whois/pkg/errors"
-	whoisTypes "github.com/Motmedel/whois/pkg/types"
-	"github.com/likexian/whois-parser"
 	"io"
 	"log/slog"
 	"net"
@@ -18,11 +12,17 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-const (
-	DefaultWhoisServer = "whois.iana.org"
-	DefaultWhoisPort   = 43
+	motmedelContext "github.com/Motmedel/utils_go/pkg/context"
+	motmedelErrors "github.com/Motmedel/utils_go/pkg/errors"
+	motmedelNetErrors "github.com/Motmedel/utils_go/pkg/net/errors"
+	"github.com/Motmedel/utils_go/pkg/utils"
+	motmedelWhoisContext "github.com/Motmedel/utils_go/pkg/whois/context"
+	motmedelWhoisTypes "github.com/Motmedel/utils_go/pkg/whois/types"
+	whoisErrors "github.com/Motmedel/whois/pkg/errors"
+	whoisTypes "github.com/Motmedel/whois/pkg/types"
+	"github.com/Motmedel/whois/pkg/types/query_config"
+	"github.com/likexian/whois-parser"
 )
 
 var ExtensionToServer = map[string]string{
@@ -71,7 +71,7 @@ func getReferenceServerHostPort(whoisResult []byte) (string, int) {
 
 			portString := parsedUrl.Port()
 			if portString == "" {
-				port = DefaultWhoisPort
+				port = query_config.DefaultPort
 			} else {
 				port, err = strconv.Atoi(portString)
 				if err != nil {
@@ -80,25 +80,26 @@ func getReferenceServerHostPort(whoisResult []byte) (string, int) {
 			}
 
 			return hostName, port
-		} else {
-			address := parsedUrl.Path
-			if address == "" {
+		}
+
+		address := parsedUrl.Path
+		if address == "" {
+			return "", 0
+		}
+
+		if strings.Contains(hostName, ":") {
+			addressSplit := strings.Split(hostName, ":")
+			hostName = addressSplit[0]
+			portString := addressSplit[1]
+			port, err = strconv.Atoi(portString)
+			if err != nil {
 				return "", 0
 			}
 
-			if strings.Contains(hostName, ":") {
-				addressSplit := strings.Split(hostName, ":")
-				hostName = addressSplit[0]
-				portString := addressSplit[1]
-				port, err = strconv.Atoi(portString)
-				if err != nil {
-					return "", 0
-				}
-				return hostName, port
-			} else {
-				return address, DefaultWhoisPort
-			}
+			return hostName, port
 		}
+
+		return address, query_config.DefaultPort
 	}
 
 	return "", 0
@@ -139,7 +140,9 @@ func query(
 	if err != nil {
 		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("dialer dial: %w", err), address, dialer)
 	}
-	// TODO: Check `nil` connection?
+	if utils.IsNil(connection) {
+		return nil, motmedelErrors.NewWithTrace(motmedelNetErrors.ErrNilConn)
+	}
 	defer func() {
 		if err := connection.Close(); err != nil {
 			slog.WarnContext(
@@ -154,9 +157,7 @@ func query(
 
 	writeData := []byte(queryString + "\r\n")
 
-	// TODO: This should be extracted from `ctx`...
-
-	whoisContext := &motmedelWhoisTypes.WhoisContext{
+	baseWhoisContext := &motmedelWhoisTypes.WhoisContext{
 		ServerAddress:   server,
 		ServerIpAddress: connection.RemoteAddr().String(),
 		ServerPort:      port,
@@ -165,77 +166,56 @@ func query(
 		RequestData:     writeData,
 	}
 
-	_ = connection.SetWriteDeadline(time.Now().Add(client.WriteTimeout))
-	_, err = connection.Write(writeData)
-	if err != nil {
-		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("connection write: %w", err), connection, writeData)
+	whoisContext, ok := ctx.Value(motmedelWhoisContext.Key).(*motmedelWhoisTypes.WhoisContext)
+	if ok {
+		whoisContext.ServerAddress = baseWhoisContext.ServerAddress
+		whoisContext.ServerIpAddress = baseWhoisContext.ServerIpAddress
+		whoisContext.ServerPort = baseWhoisContext.ServerPort
+		whoisContext.ClientIpAddress = baseWhoisContext.ClientIpAddress
+		whoisContext.Transport = baseWhoisContext.Transport
+		whoisContext.RequestData = baseWhoisContext.RequestData
+	} else {
+		whoisContext = baseWhoisContext
 	}
 
-	_ = connection.SetReadDeadline(time.Now().Add(client.ReadTimeout))
+	ctx = context.WithValue(ctx, motmedelWhoisContext.Key, whoisContext)
+
+	if err := connection.SetWriteDeadline(time.Now().Add(client.WriteTimeout)); err != nil {
+		return nil, motmedelErrors.NewWithTraceCtx(
+			ctx,
+			fmt.Errorf("connection set write deadline: %w", err),
+			connection,
+		)
+	}
+	_, err = connection.Write(writeData)
+	if err != nil {
+		return nil, motmedelErrors.NewWithTraceCtx(
+			ctx,
+			fmt.Errorf("connection write: %w", err),
+			connection,
+			writeData,
+		)
+	}
+
+	if err := connection.SetReadDeadline(time.Now().Add(client.ReadTimeout)); err != nil {
+		return nil, motmedelErrors.NewWithTraceCtx(
+			ctx,
+			fmt.Errorf("connection set read deadline: %w", err),
+			connection,
+		)
+	}
 	data, err := io.ReadAll(connection)
 	if err != nil {
-		return nil, motmedelErrors.NewWithTrace(fmt.Errorf("io read all (connection): %w", err), connection)
+		return nil, motmedelErrors.NewWithTraceCtx(
+			ctx,
+			fmt.Errorf("io read all (connection): %w", err),
+			connection,
+		)
 	}
 
 	whoisContext.ResponseData = data
 
 	return data, nil
-}
-
-func QueryWhois(
-	ctx context.Context,
-	value string,
-	client *whoisTypes.Client,
-	serverAddress string,
-	serverPort int,
-	additional bool,
-) ([]byte, error) {
-	if value == "" {
-		return nil, nil
-	}
-
-	if client == nil {
-		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
-	}
-
-	if serverAddress == "" {
-		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyServer)
-	}
-
-	if serverPort == 0 {
-		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrUnsetPort)
-	}
-
-	// TODO: Support AS lookup, maybe.
-
-	result, err := query(ctx, value, serverAddress, serverPort, client)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	if len(result) == 0 {
-		return nil, nil
-	}
-
-	if !additional {
-		return result, nil
-	}
-
-	referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
-	if referenceServerHost == "" || referenceServerPort == 0 {
-		return result, nil
-	}
-
-	// TODO: Need another ctx here? Use `error` with `Context` method?
-
-	referenceResult, err := query(ctx, value, referenceServerHost, referenceServerPort, client)
-	if err != nil {
-		return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), referenceServerHost, referenceServerPort)
-	}
-	if len(referenceResult) == 0 {
-		return result, nil
-	}
-
-	return referenceResult, nil
 }
 
 func getExtension(domain string) string {
@@ -253,11 +233,12 @@ func getExtension(domain string) string {
 	return extension
 }
 
-func QueryDefaultWhois(
+func Query(
 	ctx context.Context,
 	value string,
 	client *whoisTypes.Client,
 	additional bool,
+	options ...query_config.Option,
 ) ([]byte, error) {
 	if value == "" {
 		return nil, nil
@@ -267,39 +248,69 @@ func QueryDefaultWhois(
 		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrNilClient)
 	}
 
-	extension := getExtension(value)
-	if extension == "" {
-		return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyExtension)
+	config := query_config.New(options...)
+
+	server := config.Server
+	port := config.Port
+
+	if server == query_config.DefaultServer && port == query_config.DefaultPort {
+		extension := getExtension(value)
+		if extension == "" {
+			return nil, motmedelErrors.NewWithTrace(whoisErrors.ErrEmptyExtension)
+		}
+
+		extensionToServerRwMutex.RLock()
+		extensionServer, ok := ExtensionToServer[extension]
+		if ok {
+			extensionToServerRwMutex.RUnlock()
+			server = extensionServer
+		} else {
+			extensionToServerRwMutex.RUnlock()
+			result, err := query(ctx, extension, server, port, client)
+			if err != nil {
+				return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), extension)
+			}
+			if len(result) == 0 {
+				return nil, nil
+			}
+
+			server, port = getReferenceServerHostPort(result)
+			if server == "" || port == 0 {
+				return nil, nil
+			}
+
+			extensionToServerRwMutex.Lock()
+			ExtensionToServer[extension] = server
+			extensionToServerRwMutex.Unlock()
+		}
 	}
 
-	var referenceServerHost string
-	referenceServerPort := 43
-
-	var ok bool
-	extensionToServerRwMutex.RLock()
-	if referenceServerHost, ok = ExtensionToServer[extension]; !ok {
-		extensionToServerRwMutex.RUnlock()
-		result, err := query(ctx, extension, DefaultWhoisServer, DefaultWhoisPort, client)
-		if err != nil {
-			return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), extension)
-		}
-		if len(result) == 0 {
-			return nil, nil
-		}
-
-		referenceServerHost, referenceServerPort = getReferenceServerHostPort(result)
-		if referenceServerHost == "" || referenceServerPort == 0 {
-			return nil, nil
-		}
-
-		extensionToServerRwMutex.Lock()
-		ExtensionToServer[extension] = referenceServerHost
-		extensionToServerRwMutex.Unlock()
-	} else {
-		extensionToServerRwMutex.RUnlock()
+	result, err := query(ctx, value, server, port, client)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	if len(result) == 0 {
+		return nil, nil
 	}
 
-	return QueryWhois(ctx, value, client, referenceServerHost, referenceServerPort, additional)
+	if !additional {
+		return result, nil
+	}
+
+	referenceServerHost, referenceServerPort := getReferenceServerHostPort(result)
+	if referenceServerHost == "" || referenceServerPort == 0 {
+		return result, nil
+	}
+
+	referenceResult, err := query(ctx, value, referenceServerHost, referenceServerPort, client)
+	if err != nil {
+		return nil, motmedelErrors.New(fmt.Errorf("query: %w", err), referenceServerHost, referenceServerPort)
+	}
+	if len(referenceResult) == 0 {
+		return result, nil
+	}
+
+	return referenceResult, nil
 }
 
 func Parse(whoisResult []byte) (*whoisparser.WhoisInfo, error) {
