@@ -147,7 +147,7 @@ func query(
 	defer func() {
 		if err := connection.Close(); err != nil {
 			slog.WarnContext(
-				motmedelContext.WithErrorContextValue(
+				motmedelContext.WithError(
 					ctx,
 					motmedelErrors.NewWithTrace(fmt.Errorf("connection close: %w", err), connection),
 				),
